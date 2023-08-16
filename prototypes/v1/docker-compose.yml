@@ -1,0 +1,198 @@
+# Note: This file will require tweaking to work correctly on a different machine.
+# It is primarily meant as an example and reference file.
+version: "3"
+services:
+  # Standard Services
+  npm:
+    image: 'jc21/nginx-proxy-manager:latest'
+    restart: unless-stopped
+    ports:
+      - '80:80'
+      - '443:443' 
+      - '81:81' 
+    volumes:
+      - ${DOCKER_VOLUME_PATH}/npm/data:/data
+      - ${DOCKER_VOLUME_PATH}/npm/letsencrypt:/etc/letsencrypt
+
+  jupyter:
+    image: jupyter/tensorflow-notebook
+    container_name: jupyter
+    restart: unless-stopped
+    volumes:
+      -  ${DOCKER_VOLUME_PATH}/jupyter:/home/jovyan/work
+
+  dashy:
+    image: lissy93/dashy
+    container_name: dashy
+    # Pass in your config file below, by specifying the path on your host machine
+    volumes:
+      - ${DOCKER_VOLUME_PATH}/dashy/conf.yml:/app/public/conf.yml
+    # Set any environmental variables
+    environment:
+      - NODE_ENV=production
+      - UID=1000
+      - GID=1000
+    # Specify restart policy
+    restart: unless-stopped
+    # Configure healthchecks
+    healthcheck:
+      test: ['CMD', 'node', '/app/services/healthcheck']
+      interval: 1m30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  filebrowser:
+    image: filebrowser/filebrowser
+    restart: unless-stopped
+    # user: 1000:1000
+    volumes:
+      - ${DOCKER_VOLUME_PATH}/filebrowser/data:/srv
+      - ${DOCKER_VOLUME_PATH}/filebrowser/filebrowser.db:/database.db 
+      - ${DOCKER_VOLUME_PATH}/filebrowser/.filebrowser.json:/.filebrowser.json 
+
+   gitlab:
+    image: 'gitlab/gitlab-ee:latest'
+    restart: always
+    hostname: 'gitlab'
+    environment:
+      GITLAB_OMNIBUS_CONFIG: |
+        external_url 'http://gitlab.apocrypha.swenson.software'
+        # Add any other gitlab.rb configuration here, each on its own line
+    ports:
+      - '8022:22'
+    volumes:
+      - '${DOCKER_VOLUME_PATH}/gitlab/config:/etc/gitlab'
+      - '${DOCKER_VOLUME_PATH}/gitlab/logs:/var/log/gitlab'
+      - '${DOCKER_VOLUME_PATH}/gitlab/data:/var/opt/gitlab'
+    shm_size: '256m'
+
+  # Wiki Group
+  wiki-db:
+    image: postgres:11-alpine
+    environment:
+      POSTGRES_DB: wiki
+      POSTGRES_PASSWORD: wikijsrocks
+      POSTGRES_USER: wikijs
+    logging:
+      driver: "none"
+    restart: unless-stopped
+    volumes:
+      - ${DOCKER_VOLUME_PATH}/wiki/data:/var/lib/postgresql/data
+  wiki:
+    image: ghcr.io/requarks/wiki:2
+    depends_on:
+      - wiki-db
+    environment:
+      DB_TYPE: postgres
+      DB_HOST: wiki-db
+      DB_PORT: 5432
+      DB_USER: wikijs
+      DB_PASS: wikijsrocks
+      DB_NAME: wiki
+    restart: unless-stopped
+
+  # Coder Group
+  coder:
+    image: ghcr.io/coder/coder:${CODER_VERSION:-latest}
+    environment:
+      CODER_PG_CONNECTION_URL: "postgresql://${POSTGRES_USER:-username}:${POSTGRES_PASSWORD:-password}@coder-database/${POSTGRES_DB:-coder}?sslmode=disable"
+      CODER_HTTP_ADDRESS: "0.0.0.0:7080"
+      CODER_ACCESS_URL: "${CODER_ACCESS_URL}"
+      CODER_WILDCARD_ACCESS_URL: ${CODER_WILDCARD_URL}
+    # If the coder user does not have write permissions on
+    # the docker socket, you can uncomment the following
+    # lines and set the group ID to one that has write
+    # permissions on the docker socket.
+    group_add:
+      - "999" # docker group on host
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      coder-database:
+        condition: service_healthy
+  
+  coder-database:
+    image: "postgres:14.2"
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-username} 
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password} 
+      POSTGRES_DB: ${POSTGRES_DB:-coder} 
+    volumes:
+      - ${DOCKER_VOLUME_PATH}/coder:/var/lib/postgresql/data 
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${POSTGRES_USER:-username} -d ${POSTGRES_DB:-coder}",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # Mattermost Group
+  postgres:
+    image: postgres:${POSTGRES_IMAGE_TAG}
+    restart: ${RESTART_POLICY}
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 100
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /var/run/postgresql
+    volumes:
+      - ${POSTGRES_DATA_PATH}:/var/lib/postgresql/data
+    environment:
+      # timezone inside container
+      - TZ
+
+      # necessary Postgres options/variables
+      - POSTGRES_USER
+      - POSTGRES_PASSWORD
+      - POSTGRES_DB
+
+  mattermost:
+    depends_on:
+      - postgres
+    image: mattermost/${MATTERMOST_IMAGE}:${MATTERMOST_IMAGE_TAG}
+    restart: ${RESTART_POLICY}
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 200
+    read_only: ${MATTERMOST_CONTAINER_READONLY}
+    tmpfs:
+      - /tmp
+    volumes:
+      - ${MATTERMOST_CONFIG_PATH}:/mattermost/config:rw
+      - ${MATTERMOST_DATA_PATH}:/mattermost/data:rw
+      - ${MATTERMOST_LOGS_PATH}:/mattermost/logs:rw
+      - ${MATTERMOST_PLUGINS_PATH}:/mattermost/plugins:rw
+      - ${MATTERMOST_CLIENT_PLUGINS_PATH}:/mattermost/client/plugins:rw
+      - ${MATTERMOST_BLEVE_INDEXES_PATH}:/mattermost/bleve-indexes:rw
+    environment:
+      # timezone inside container
+      - TZ
+
+      # necessary Mattermost options/variables (see env.example)
+      - MM_SQLSETTINGS_DRIVERNAME
+      - MM_SQLSETTINGS_DATASOURCE
+
+      # necessary for bleve
+      - MM_BLEVESETTINGS_INDEXDIR
+
+      # additional settings
+      - MM_SERVICESETTINGS_SITEURL
+  
+  # Custom Services
+  meshtastic-web-api:
+    container_name: meshtastic-web-api
+    image: bmswens/meshtastic-web-api:20e9929
+    privileged: true
+    restart: unless-stopped
+    environment:
+      MATTERMOST_ENABLED: TRUE
+      MATTERMOST_TOKEN: ${MATTERMOST_TOKEN}
+      MATTERMOST_WEBHOOK: ${MATTERMOST_WEBOOK}
+    volumes:
+      - ${DOCKER_VOLUME_PATH}/meshtastic-web-api:/app/data
