@@ -63,11 +63,11 @@ Specfic software deployments should be dependent on use case, but systems should
 
 - [Project Arc](https://usaf-project-arc.github.io/)
     - Providing the time and connections to implement and test. 
-- [Brandon Swenson]()
+- [Brandon Swenson](https://github.com/bmswens)
     - Initial idea, paper, and implementation of the first protoype and lite SABR.
 - [Jordon Jones]()
     - Case recommendation, CNC design for carbon fiber plate.
-- [Kris Molter]()
+- [Kris Molter](https://github.com/kmolter14)
     - Second iteration of the SABR, first battery powered prototype.
 
 ## Images
